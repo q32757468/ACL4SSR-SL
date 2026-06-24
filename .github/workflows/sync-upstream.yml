@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 当前仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 3-way merge 同步上游
         run: |
