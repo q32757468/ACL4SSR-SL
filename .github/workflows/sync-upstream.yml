@@ -1,0 +1,52 @@
+name: 同步上游 ACL4SSR 配置
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # 每6小时检查一次
+  workflow_dispatch:          # 支持手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 当前仓库
+        uses: actions/checkout@v4
+
+      - name: 根据本地文件匹配上游并同步
+        run: |
+          # 列出本地已有的 ACL4SSR_SL_*.ini 文件
+          LOCAL_FILES=$(ls Clash/config/ACL4SSR_SL_*.ini 2>/dev/null || true)
+
+          if [ -z "$LOCAL_FILES" ]; then
+            echo "没有找到本地 ACL4SSR_SL_*.ini 文件，跳过"
+            exit 0
+          fi
+
+          for local_path in $LOCAL_FILES; do
+            local_name=$(basename "$local_path")
+            # ACL4SSR_SL_Online_Full.ini → ACL4SSR_Online_Full.ini
+            upstream_name="${local_name//ACL4SSR_SL_/ACL4SSR_}"
+
+            echo "同步: $upstream_name → $local_name"
+
+            curl -sS -o "Clash/config/${local_name}" \
+              "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/${upstream_name}"
+
+            echo "完成: Clash/config/${local_name}"
+          done
+
+      - name: 检查变更并提交
+        run: |
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "没有变更，跳过提交"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Clash/config/ACL4SSR_SL_*.ini
+
+          git commit -m "sync: 同步上游 ACL4SSR 配置更新" || echo "没有需要提交的变更"
+
+          git push
