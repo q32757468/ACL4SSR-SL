@@ -12,9 +12,8 @@ jobs:
       - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
-      - name: 根据本地文件匹配上游并同步
+      - name: 3-way merge 同步上游
         run: |
-          # 列出本地已有的 ACL4SSR_SL_*.ini 文件
           LOCAL_FILES=$(ls Clash/config/ACL4SSR_SL_*.ini 2>/dev/null || true)
 
           if [ -z "$LOCAL_FILES" ]; then
@@ -26,13 +25,54 @@ jobs:
             local_name=$(basename "$local_path")
             # ACL4SSR_SL_Online_Full.ini → ACL4SSR_Online_Full.ini
             upstream_name="${local_name//ACL4SSR_SL_/ACL4SSR_}"
+            base_path=".upstream-base/Clash/config/${upstream_name}"
+            new_path="/tmp/${upstream_name}"
 
-            echo "同步: $upstream_name → $local_name"
+            echo "============================================"
+            echo "同步: ${upstream_name} → ${local_name}"
 
-            curl -sS -o "Clash/config/${local_name}" \
+            # 下载最新上游版本
+            curl -sS -o "${new_path}" \
               "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/${upstream_name}"
 
-            echo "完成: Clash/config/${local_name}"
+            # 检查上游是否有变化
+            if diff -q "${base_path}" "${new_path}" > /dev/null 2>&1; then
+              echo "上游无变化，跳过"
+              continue
+            fi
+
+            # 检查本地是否有未提交的修改
+            if [ -n "$(git diff -- "${local_path}")" ]; then
+              echo "⚠️  本地文件有未提交的修改，跳过合并（请先提交本地变更）"
+              continue
+            fi
+
+            # 3-way merge: ours(本地) vs base(旧上游) vs theirs(新上游)
+            echo "执行 3-way merge..."
+            set +e
+            git merge-file -p \
+              "${local_path}" \
+              "${base_path}" \
+              "${new_path}" > /tmp/merged.ini 2>/tmp/merge-error.log
+            merge_exit_code=$?
+            set -e
+
+            if [ $merge_exit_code -eq 0 ]; then
+              echo "✓ 自动合并成功"
+              mv /tmp/merged.ini "${local_path}"
+              # 更新基准文件为本次上游版本
+              mv "${new_path}" "${base_path}"
+            elif grep -q "Merge conflict" /tmp/merge-error.log 2>/dev/null; then
+              echo "✗ 合并冲突！请手动处理 ${local_name}"
+              echo "  冲突文件已写入 ${local_name}"
+              mv /tmp/merged.ini "${local_path}"
+              # 不更新 base，下次还会拉同一版本触发冲突
+              exit 1
+            else
+              echo "✗ 合并出错:"
+              cat /tmp/merge-error.log
+              exit 1
+            fi
           done
 
       - name: 检查变更并提交
@@ -45,7 +85,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add Clash/config/ACL4SSR_SL_*.ini
+          git add Clash/config/ACL4SSR_SL_*.ini .upstream-base/
 
           git commit -m "sync: 同步上游 ACL4SSR 配置更新" || echo "没有需要提交的变更"
 
